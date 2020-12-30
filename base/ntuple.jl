@@ -91,3 +91,51 @@ end
         (t..., fill(val, N-M)...)
     end
 end
+
+# Specializations for copyto! of various `NTuple`s
+@noinline function check_inds_compatible(dest::AbstractArray, src::Tuple)
+    destinds = LinearIndices(dest)
+    idf, isf = first(destinds), firstindex(src)
+    Δi = idf - isf
+    (checkbounds(Bool, destinds, isf+Δi) & checkbounds(Bool, destinds, length(src)+Δi)) ||
+        throw(BoundsError(dest, srcinds))
+end
+
+function _copyto_generated!(dest::AbstractArray, src::NTuple{N, Any}) where N
+    if @generated
+        ret = quote
+            check_inds_compatible(dest, src)
+            idxs = eachindex(dest)
+        end
+        state = ()
+        for n in 1:N
+            append!(ret.args, (quote
+                ind, state = iterate(idxs, $(state...))
+                @inbounds dest[ind] = src[$n]
+            end).args)
+            state = (:state,)
+        end
+        push!(ret.args, :(return dest))
+        ret
+    else
+        length(src) == 0 && return dest
+        return copyto!(dest, firstindex(dest), src, firstindex(src))
+    end
+end
+
+# Non-homogeneous tuples
+function copyto!(dest::AbstractArray, src::Tuple)
+    if length(src) < 10
+        # Manual optimization for short tuples
+        # TODO: Better support for homogeneous tuple tails
+        return _copyto_generated!(dest, src)
+    else
+        return copyto!(dest, firstindex(dest), src, firstindex(src))
+    end
+end
+
+# Specialization for homogeneous tuples
+function copyto!(dest::AbstractArray, src::Tuple{Vararg{T}} where T)
+    length(src) == 0 && return dest
+    copyto!(dest, firstindex(dest), src, firstindex(src))
+end
